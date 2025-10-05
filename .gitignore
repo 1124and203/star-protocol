@@ -1,49 +1,285 @@
-# History files
-.Rhistory
-.Rapp.history
+# Load Seurat object containing pan-cancer T-cell data
+>x <- readRDS("Pan_Cancer_T_Seurat.RDS")
+# This pre-annotated object contains the 'Lineage' and 'Cell_Type' metadata generated in the prerequisite annotation step above.
+# Subset CD4+ and CD8+ T cells
+>cd4 <- subset(x, subset = Lineage == "CD4")
+>cd8 <- subset(x, subset = Lineage == "CD8")
+# Generate UMAP plots for both subsets
+>pdf("UMAP_CD4_CD8_Cell_Types.pdf", width=10, height=8)
+>DimPlot(cd4, group.by = "Cell_Type")  # CD4 UMAP by cell type
+>DimPlot(cd8, group.by = "Cell_Type")  # CD8 UMAP by cell type
+>dev.off()
 
-# Session Data files
-.RData
-.RDataTmp
+# Locate DEG analysis result files
+>files <- list.files(path = "../DEGs/", pattern = "RDS", full.names = T)
+# Initialize storage objects
+>allave <- NULL  # For average expression matrices
+>degs <- NULL    # Placeholder for DEG results (unused)
+>for(i in 1:length(files)){
+cname <- NULL
+# Extract cell type from filename (CD4/CD8)
+cname <- gsub(".(CD.)_DEGs.","\\1",files[i])
+# Load and filter DEGs (adj.p<0.05, logFC>0.25)
+>    x <- NULL
+>    x <- readRDS(files[i])
+>    x <- x[which(x$p_val_adj < 0.05 & x$avg_log2FC > 0.25),]
+>    x <- x[order(x$p_val_adj, decreasing = F),]
+>    x <- x[order(x$avg_log2FC, decreasing = T),]
+>    x <- split(x, x$cluster)
+# Keep top 10 DEGs per cluster
+>    x <- lapply(x, function(y){
+>      y <- y[1:ifelse(nrow(y) > 10, 10, nrow(y)),]
+>   }
+>x <- do.call(rbind.data.frame, x)
 
-# User-specific files
-.Ruserdata
+# Process based on cell type
+>if(length(grep("CD4", cname, ignore.case = T)) > 0){
+>    cd4$ID <- paste(cd4$Cell_Type, cd4$Treatment_Group, sep = "_")
+>    Idents(cd4) <- "ID"
+>    ave <- NULL
+>    ave <- AverageExpression(cd4)$RNA
+>    allave[[i]] <- ave
+>    names(allave)[i] <- cname
+>  }else if(length(grep("CD8", cname, ignore.case = T)) > 0){
+>      cd8$ID <- paste(cd8$Cell_Type, cd8$Treatment_Group, sep = "_")
+>      Idents(cd8) <- "ID"
+>      ave <- NULL
+>      ave <- AverageExpression(cd8)$RNA
+>      allave[[i]] <- ave
+>      names(allave)[i] <- cname
+>  }
 
-# Example code in package build process
-*-Ex.R
+# Filter expression matrix to include only DEGs
+>ave <- ave[which(row.names(ave) %in% unique(x$gene)),]
+# Double normalization (column and row scaling)
+>plotx <- scale(ave)              # Scale by columns (samples)
+>plotx <- t(scale(t(plotx)))      # Scale by rows (genes)
+ # Extract cell type info from column names
+>ctype <- unique(gsub("(CD4|CD8).","\\1",colnames(plotx)))
 
-# Output files from R CMD build
-/*.tar.gz
+# Create heatmap annotations
+>ca = HeatmapAnnotation(
+>    show_legend = c(T,T),
+>    Class = gsub(".(Pre|Post)","\\1",colnames(plotx)), # Treatment timepoint
+>    Cell_Type_Class = gsub("(CD4|CD8).","\\1",colnames(plotx)), # Cell type
+>    col = list(
+>     Class = c(Pre = "#D75B58", Post = "#F5BFD3"), # Color mapping
+>     Cell_Type_Class = c(CD4 = color_conditions$cold[i],
+>                           CD8 = color_conditions$cold[i])))
+# Color scale for expression values
+>cols = rev(colorRampPalette(RColorBrewer::brewer.pal(11,"RdYlBu"))(100))
+# Column splitting factor
+>csplit <- gsub(".(Pre|Post)","\\1",colnames(plotx))
 
-# Output files from R CMD check
-/*.Rcheck/
+>csplit <- NULL
+>csplit <- gsub(".(Pre|Post)","\\1",colnames(plotx))
+>somePDFPath = paste("DEGs_Heatmap_",cname,".pdf", sep = "")
+>pdf(file=somePDFPath, width=6, height=4,pointsize=12)
+>print(Heatmap(
+>    plotx,
+>    name = "Expression",
+>    column_split = csplit,          # Split by treatment
+>    top_annotation = ca,            # Add annotations
+>    col = cols,                     # Color scale
+>    cluster_columns = TRUE,
+>    column_names_gp = gpar(fontsize = 8),
+>    row_names_gp = gpar(fontsize = 0), # Hide gene names
+>    show_row_dend = TRUE,show_column_dend = TRUE, 
+>    show_column_names = TRUE, show_row_names = TRUE ))
+>dev.off()
 
-# RStudio files
-.Rproj.user/
+>cts <- c("CD4","CD8") # Cell types to process
+>pdf("Signature_Genes_CD4_CD8_DotPlot.pdf", width=10, height=14)
+>for(j in 1:length(cts)){
+# Load marker genes (convert to uppercase)
+>    cmarkers <- toupper(markers[[cts[j]]])
+# Load reference markers from file
+>    cref <- read.table(paste(cts[j],"_Markers.txt", sep="\t", header=T)
+# Select appropriate Seurat object
+>x <- if(cts[j] == "CD4") cd4 else cd8
 
-# produced vignettes
-vignettes/*.html
-vignettes/*.pdf
+# Set cell type as identity and factor levels
+>Idents(x) <- "Cell_Type"
+>x$Cell_Type <- factor(x$Cell_Type, levels = sort(unique(x$Cell_Type)))
+# Generate base dot plot
+>p <- NULL
+>p <- DotPlot(x, features =  cmarkers, group.by = "Cell_Type", scale = T, cluster.idents = T) +
+>    theme_light(base_size = 13)+
+>    coord_flip()+RotatedAxis()+ggtitle(paste(cts[j], sep = ""))+
+>    scale_color_gradientn(colors = rev(color_conditions$RedYellowBlue))+ #ccols
+>    scale_size(range = c(1,6))+
+>    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), strip.background = element_blank(), panel.border = element_rect(colour = "black", fill = NA), strip.text.x = element_blank(), axis.text.y = element_text(size = 14), axis.text.x = element_text(size = 16))+
+>    xlab(paste(cts[j], ":Signature Markers", sep = ""))+ylab("Celltype")
+# Modify percentage expression values
+>p$data$pct.exp <- abs(p$data$avg.exp.scaled)
+>p <- p + guides(size = guide_legend("Abs(Average Expression)"))
+>print(p)
+>  }
+>dev.off()
 
-# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
-.httr-oauth
+# Clear memory by removing object 'x'
+>rm(x)
+# Load pre-calculated cell type proportions
+>prop <- readRDS("Pre_Post_Prop.RDS")
+# Set up PDF output
+>pdf("Pre_Post_Barplot.pdf", width=14, height=6)
 
-# knitr and R markdown default cache directories
-*_cache/
-/cache/
+>ggplot(prop, aes(Cancer, Proportion, fill = Cell_Type, label = Cell_Type_Index)) +
+>    geom_bar(position = "stack", stat = "identity") +  # Stacked bars
+>    facet_wrap(~IIID, ncol = 4) +        # Multi-panel by patient
+>    scale_fill_manual(values = ccols) +  # Custom color palette
+>    theme_linedraw(base_size = 20) +      # Clean theme
+>    RotatedAxis() +                         # Tilt x-axis labels
+>    theme(legend.position = "bottom",      # Legend customization
+>          legend.title = element_blank()) +
+>    guides(color = guide_legend(ncol=2)) + # Multi-column legend
+>    xlab("")                                  # Remove x-axis title
+>dev.off()
 
-# Temporary files created by R markdown
-*.utf8.md
-*.knit.md
+# Clear memory and load regulon AUC data
+>rm(x)
+>allaucs <- readRDS("PrePost_CD4CD8_Regulon_AUC_Celltypes.RDS")
+# Set up PDF output for tree plots
+>pdf("PrePost_CD4CD8_Regulon_AUC_Tree_Plot.pdf", width=14, height=14)
 
-# R Environment Variables
-.Renviron
+>for(j in 1:length(prepost)){
+>    plotx <- allaucs[allaucs$Treatment_Group == prepost[j],]
+# Format sample IDs and regulon names
+>    plotx$SID <- paste(plotx$Treatment_Group, plotx$Cancer, plotx$Cell_Type, sep="|")
+>    plotx$Regulon <- gsub("(.) \\(.\\)$|_extended","\\1", plotx$Regulon)
+# Reshape to matrix format
+>    mplotx <- reshape2::dcast(plotx, SID ~ Regulon, 
+>    value.var="AUC")
+>    rownames(mplotx) <- mplotx$SID
+>    mplotx <- scale(as.matrix(mplotx[,-1]))
+>  }
 
-# pkgdown site
-docs/
+# Compute correlation-based distance
+>cdist <- cor(t(mplotx))
+>ctree <- ape::bionj(dist(cdist, method="euclidean"))
+>groupcols <- c(CD4 = color_conditions$cold[1], CD8 = color_conditions$cold[2])
+# Prepare annotation data
+>clabel <- data.frame(
+>    SID = rownames(mplotx),
+>    Treatment_Group = gsub("(.?)\\|(.?)\\|(.)","\\1",row.names(plotx), ignore.case = T),
+>    Cancer = gsub("(.?)\\|(.?)\\|(.)","\\2",row.names(plotx), ignore.case = T),
+>    Cell_Type = gsub("(.?)\\|(.?)\\|(.)","\\3",row.names(plotx), ignore.case = T))
+>    clabel <- clabel[match(ctree$tip.label, clabel$SID),]
+>    clabel$node <- 1:nrow(clabel)
+>    cctree <- NULL
+>    cctree <- full_join(ctree, clabel, by = 'node')
 
-# translation temp files
-po/*~
+# Generate tree plot
+>p <- ggtree(cctree, layout="daylight", branch.length = 'none')
+>clist <- NULL
+>clist <- list(ctree = ctree, cctree = cctree, mplotx = mplotx, plotx = plotx, auctree = p)
+>aucresults[[length(aucresults)+1]] <- clist
+>names(aucresults)[length(aucresults)] <- paste("AUC", prepost[j], sep = "_")
+>p <- p + geom_tippoint(aes(color=Cancer, shape = Cell_Type), size=5, alpha=0.8)+
+>    scale_color_manual(values = cancercols)  +
+>    scale_shape_manual(values = 1:length(mplotx$Cell_Type))+
+>    geom_tiplab(aes(label = Cell_Type), size=2)+ggtitle(paste("Regulon Activity: ",prepost[j], sep = ""))+
+>    theme(plot.title = element_text(hjust = 0.5, size = 20))
+>print(p)
+>  }
 
-# RStudio Connect folder
-rsconnect/
+# Load TCR clonal expansion statistics
+>tcrdata <- readRDS("Frequency_CD4CD8_Clonal_Expansion_Test_Statistics.RDS")
+>plotx <- tcrdata  # Create working copy
+
+# Plot 1: Grouped by FC categories
+>p1 <- ggplot(plotx[plotx$Cutoff == 0,],
+>        aes(Cell_Type, Cancer, color = FC_Group, size = Sig_Level)) +
+>        geom_point() +
+>        labs(title = "Post(R) vs Post(NR)") +
+>        theme_classic(base_size = 20) +
+>        RotatedAxis()
+# Plot 2: Continuous log2FC visualization  
+>p2 <- ggplot(plotx[plotx$Cutoff == 0,],
+>        aes(Cell_Type, Cancer, color = Clonal_log2FC_G2vsG1, size = Sig_Level)) +
+>        geom_point() +
+>        labs(title = "Post(R) vs Post(NR)") +
+>        theme_classic(base_size = 20) +
+>        RotatedAxis()
+# Export combined plots
+>pdf("Clonal_Homeostasis_Post_RNR_Specific_TBCRs.pdf", 
+>        width=12,height=6)
+>print(p1)
+>print(p2)
+>dev.off()
+
+# Define comparison groups and load TCR data
+>ccompare <- list(c("Post(R)", "Post(NR)")) 
+>chosen_cutoff <- 0
+>samplepostrnr <- readRDS(paste0("../TBCR/Tuning_New_Category/Cutoff_", chosen_cutoff, "_samplepostrnr.RDS"))
+# Initialize PDF output
+>pdf("FigurexxxxA2_Boxplot_Expansion0_Clonal_Homeostasis_Post_RNR_Specific_TBCRs.pdf", 
+>     width=8, height=8,pointsize=12)
+
+# Generate per-celltype statistical plots
+>p <- NULL
+>for(i in 1:length(selected)){
+>p[[i]] <- ggbetweenstats(current[which(current$TBCR == "TCR" & current$Celltype %in% selected[i]),],
+>      title = selected[i], Group, Cell_Num,
+>      p.adjust.method = "BH",
+>      xlab = "Post-Treatment Groups",
+>      ylab = "Clonal Frequency")}
+# Combine subplots with unified title
+>combine_plots(p, plotgrid.args = list(nrow=2),
+>      annotation.args = list(title= paste("TCR Clonal Expansion",sep = "")))
+
+# Create faceted comparison plot
+>p <- NULL
+>p <- ggplot(current[which(current$TBCR == "TCR" & current$Celltype %in% selected),],
+>       aes(x=Group, y=Cell_Num, color=Group)) +
+>       facet_wrap(~Celltype, ncol = 2, scales = "free")+ 
+>      geom_boxplot(alpha = 0) +  ggtitle(paste("TCR Clonal Expansion",sep = ""))+
+>      geom_point(size = 2, position = position_jitterdodge()) +
+>      scale_color_manual(values = ccols$general)+  ylab("Frequency")+xlab("Post-Treatment Groups")+
+>      stat_compare_means(comparisons = ccompare, method="t.test", label="p.format", step.increase = 0.2, hide.ns = T, hjust = -1, vjust = 1.2, tip.length = 0.1, color = "black", size = 4) + # , aes(label = paste0("p = ", ..p.format..))
+>      stat_compare_means(aes(group = Group), method="wilcox.test", label="p.format", hjust = 1, vjust = 0.8, tip.length = 0.1, color = "black")+
+>        theme_classic(base_size = 20)+
+>        theme(plot.title = element_text(face = "bold", size = 15, hjust = 0.5),
+>         panel.grid.major = element_blank(),
+>         panel.grid.minor = element_blank(),
+>         strip.background = element_blank(),
+>         panel.border = element_rect(colour = "black", fill = NA))
+>print(p)
+>dev.off()
+
+>library(liana)
+# Get all interaction files
+>files <- list.files(path = "CellCell/", full.names = TRUE)
+
+>for(i in 1:length(files)){
+>x <- NULL,
+>x <- readRDS(files[i])
+>x <- liana_aggregate(x) # Aggregate multiple methods
+# Standardize condition names
+>cname <- gsub(".Immune_(.)_Liana_Output.","\\1",files[i]) |>
+>          gsub("Non-responder_Post_RvsNR","Post_NR", x = _) |>
+>          gsub("Responder_Post_RvsNR","Post_R", x = _)
+# Clean cell type labels
+>x$source <- gsub("._(.)|_.$", "\\1", x$source)
+>x$target <- gsub("._(.)|_.$", "\\1", x$target)
+>x$Label <- cname
+>saveRDS(x, paste0("FigurexxxxxC_CRC_CellCell_",cname,".RDS"))
+
+>pdf(paste0("CellCell_",cname,"_Top_20_Interactions.pdf"), width=20, height=8)
+>plotx <- filter(x, aggregate_rank < 0.01) # FDR < 1%
+>cts <- sort(unique(x$source)) # Get unique sender cells
+>for(k in 1:length(cts)){
+>    if(nrow(filter(plotx, source == cts[k])) > 0){
+>p <- NULL
+>p <- liana_dotplot(plotx, source_groups = cts[k],
+>     target_groups = unique(c(plotx$source,plotx$target)),ntop=20)+
+>     RotatedAxis()+
+>    theme(axis.text.x=element_text(colour="black", size = 18, face = "plain"),
+>     plot.title = element_text(hjust = 0.5, size = 30))+
+>     scale_color_gradientn(colours = color_conditions$gradient)+
+>ggtitle(paste("CRC: ",cname,sep = ""))
+>     print(p)
+>      }}
+>dev.off()
+
+
